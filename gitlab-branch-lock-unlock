@@ -1,0 +1,61 @@
+pipeline {
+        agent {
+        node {
+            label 'master'
+        }
+        }
+    options {
+        buildDiscarder(logRotator(artifactDaysToKeepStr: '', artifactNumToKeepStr: '', daysToKeepStr: '15', numToKeepStr: '15'))
+        ansiColor('xterm')
+        disableConcurrentBuilds()
+    }
+
+    environment {
+        MAIL_RECIPIENTS = 'ADD_YOUR_EMAIL@XXX.COM'
+        GITLAB_URL = 'gitlab.company.com'
+    }
+
+    parameters {
+        choice choices: ['494', '1000', '40', '60'], description: 'Gitlab Project Code -->(i) 494  => Code repo 1 (ii) 1000 => AEM repo 1(iii) 577 => AEM repo 2 (iv) 1645 => AEM Project 3', name: 'CODE_PROJECT'
+        string(defaultValue: 'BRANCH_or_TAG NAME', description: 'Code Branch/TAG Name to Lock or Unlock', name: 'BRANCH')
+        booleanParam(defaultValue: false, description: 'Select if need to unprotect a branch', name: 'UNLOCK_BRANCH')
+        booleanParam(defaultValue: false, description: 'Select if need to protect a branch', name: 'LOCK_BRANCH')
+    }
+
+    stages {
+        stage ('Lock Branch') {
+            when {
+                expression { return LOCK_BRANCH ==~ /(?i)(Y|YES|T|TRUE|ON|RUN)/ }
+            }
+            steps {
+                sh 'printf "\\e[35mLock Branch...\\e[0m\\n"'
+                withCredentials([string(credentialsId: 'gitlab_token', variable: 'gitlab_token')]) {
+                    sh '''
+                curl --request POST --header "PRIVATE-TOKEN: ${gitlab_token}" "https://${GITLAB_URL}/api/v4/projects/${CODE_PROJECT}/protected_branches?name=${BRANCH}&push_access_level=0&merge_access_level=0&unprotect_access_level=0"
+            '''
+                }
+            }
+        }
+
+        stage ('Unlock Branch') {
+            when {
+                expression { return UNLOCK_BRANCH ==~ /(?i)(Y|YES|T|TRUE|ON|RUN)/ }
+            }
+            steps {
+                sh 'printf "\\e[35mUnlock Branch...\\e[0m\\n"'
+                withCredentials([string(credentialsId: 'gitlab_token', variable: gitlab_token')]) {
+                    sh '''
+            curl --request DELETE --header "PRIVATE-TOKEN: ${gitlab_token}" "https://${GITLAB_URL}/api/v4/projects/${CODE_PROJECT}/protected_branches/${BRANCH}"
+            curl --request POST --header "PRIVATE-TOKEN: ${gitlab_token}" --header "Content-Type: application/json" --data '{ "id": ${CODE_PROJECT}, "name": "${BRANCH}", "allowed_to_push": [{"access_level": 30}], "allowed_to_merge": [{ "access_level": 30 },{ "access_level": 40 }] }' "https://${GITLAB_URL}/api/v4/projects/${CODE_PROJECT}/protected_branches"
+          '''
+                }
+            }
+        }
+    }
+    post {
+        always {
+            emailext attachLog: true, body: '${JELLY_SCRIPT,template="static-analysis"}', mimeType: 'text/html', recipientProviders: [developers(), culprits(), brokenTestsSuspects(), upstreamDevelopers()], subject: 'Branch $BRANCH | $CODE_PROJECT $BUILD_STATUS ', to: "$MAIL_RECIPIENTS"
+            addShortText background: 'yellow', borderColor: '', color: '', link: '', text: "${BRANCH}_${CODE_PROJECT}"
+        }
+    }
+}
